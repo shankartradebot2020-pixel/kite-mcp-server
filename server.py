@@ -1,290 +1,68 @@
 import os
 import json
-import contextlib
-
-from mcp.server import Server
-import mcp.types as types
-
+from fastmcp import FastMCP
 from starlette.applications import Starlette
 from starlette.routing import Route, Mount
 
 import kite_helper
 import auth
 
-
-# ============================================================
-# MCP SERVER
-# ============================================================
-
-app = Server("zerodha-trading-tools")
+mcp = FastMCP("zerodha-trading-tools")
 
 
-# ============================================================
-# TOOL DEFINITIONS
-# ============================================================
-
-@app.list_tools()
-async def list_tools():
-    return [
-        types.Tool(
-            name="get_historical_candles",
-            description=(
-                "Get OHLC candle data for a symbol "
-                "(hourly/daily) for technical analysis."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "tradingsymbol": {
-                        "type": "string",
-                        "description": "e.g. RELIANCE, NIFTY 50"
-                    },
-                    "timeframe": {
-                        "type": "string",
-                        "enum": [
-                            "hourly",
-                            "daily",
-                            "15min",
-                            "5min"
-                        ]
-                    },
-                    "days_back": {
-                        "type": "integer",
-                        "default": 60
-                    },
-                    "exchange": {
-                        "type": "string",
-                        "default": "NSE"
-                    },
-                },
-                "required": [
-                    "tradingsymbol",
-                    "timeframe"
-                ],
-            },
-        ),
-
-        types.Tool(
-            name="get_zone_levels",
-            description=(
-                "Get the confluence support/resistance zone for a symbol: "
-                "previous week high/low (PWH/PWL), "
-                "previous month high/low (PMH/PML), "
-                "and weekly + monthly CPR pivots (S1/R1/etc). "
-                "Matches the EMA-crossover zone strategy."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "tradingsymbol": {
-                        "type": "string"
-                    },
-                    "exchange": {
-                        "type": "string",
-                        "default": "NSE"
-                    },
-                },
-                "required": [
-                    "tradingsymbol"
-                ],
-            },
-        ),
-
-        types.Tool(
-            name="detect_ema_crossovers",
-            description=(
-                "Detect 5/20 EMA crossovers on hourly candles for a symbol, "
-                "to check whether the 'crossed twice near the zone' "
-                "entry condition is met."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "tradingsymbol": {
-                        "type": "string"
-                    },
-                    "exchange": {
-                        "type": "string",
-                        "default": "NSE"
-                    },
-                    "lookback_days": {
-                        "type": "integer",
-                        "default": 20
-                    },
-                },
-                "required": [
-                    "tradingsymbol"
-                ],
-            },
-        ),
-
-        types.Tool(
-            name="get_option_chain",
-            description=(
-                "Get the option chain (strikes, LTP, OI, bid/ask) "
-                "for an underlying and expiry, used to check "
-                "premium/IV before entering so you don't overpay."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "underlying": {
-                        "type": "string",
-                        "description": "e.g. NIFTY, RELIANCE"
-                    },
-                    "expiry": {
-                        "type": "string",
-                        "description": "YYYY-MM-DD"
-                    },
-                },
-                "required": [
-                    "underlying",
-                    "expiry"
-                ],
-            },
-        ),
-    ]
+@mcp.tool()
+def get_historical_candles(tradingsymbol: str, timeframe: str, days_back: int = 60, exchange: str = "NSE") -> str:
+    """
+    Get OHLC candle data for a symbol.
+    timeframe: hourly, daily, 15min, 5min
+    """
+    result = kite_helper.get_historical_candles(tradingsymbol, timeframe, days_back, exchange)
+    return json.dumps(result, default=str)
 
 
-# ============================================================
-# TOOL EXECUTION
-# ============================================================
-
-@app.call_tool()
-async def call_tool(name: str, arguments: dict):
-    try:
-
-        if name == "get_historical_candles":
-
-            result = kite_helper.get_historical_candles(
-                arguments["tradingsymbol"],
-                arguments["timeframe"],
-                arguments.get("days_back", 60),
-                arguments.get("exchange", "NSE"),
-            )
-
-        elif name == "get_zone_levels":
-
-            result = kite_helper.get_zone_levels(
-                arguments["tradingsymbol"],
-                arguments.get("exchange", "NSE"),
-            )
-
-        elif name == "detect_ema_crossovers":
-
-            result = kite_helper.detect_ema_crossovers(
-                arguments["tradingsymbol"],
-                arguments.get("exchange", "NSE"),
-                arguments.get("lookback_days", 20),
-            )
-
-        elif name == "get_option_chain":
-
-            result = kite_helper.get_option_chain(
-                arguments["underlying"],
-                arguments["expiry"],
-            )
-
-        else:
-            raise ValueError(f"Unknown tool: {name}")
-
-        return [
-            types.TextContent(
-                type="text",
-                text=json.dumps(result, default=str),
-            )
-        ]
-
-    except Exception as e:
-
-        return [
-            types.TextContent(
-                type="text",
-                text=json.dumps(
-                    {"error": str(e)}
-                ),
-            )
-        ]
+@mcp.tool()
+def get_zone_levels(tradingsymbol: str, exchange: str = "NSE") -> str:
+    """
+    Get the confluence support/resistance zone for a symbol:
+    PWH, PWL, PMH, PML, weekly CPR (S1/R1), monthly CPR (S1/R1).
+    This is the zone where we watch for the 5/20 EMA crossover setup.
+    """
+    result = kite_helper.get_zone_levels(tradingsymbol, exchange)
+    return json.dumps(result, default=str)
 
 
-# ============================================================
-# MCP STREAMABLE HTTP
-# ============================================================
-
-# IMPORTANT:
-# streamable_http_app() is a METHOD of the Server object.
-# It is NOT imported from mcp.server.streamable_http.
-
-mcp_asgi_app = app.streamable_http_app(
-    streamable_http_path="/",
-    host="0.0.0.0",
-)
+@mcp.tool()
+def detect_ema_crossovers(tradingsymbol: str, exchange: str = "NSE", lookback_days: int = 20) -> str:
+    """
+    Detect 5/20 EMA bullish and bearish crossovers on hourly candles.
+    Used to check if the 'crossed twice near the zone' entry condition is met.
+    """
+    result = kite_helper.detect_ema_crossovers(tradingsymbol, exchange, lookback_days)
+    return json.dumps(result, default=str)
 
 
-# ============================================================
-# STARLETTE LIFESPAN
-# ============================================================
-
-# Because the MCP app is mounted inside our own Starlette app,
-# the parent application must start the MCP session manager.
-
-@contextlib.asynccontextmanager
-async def lifespan(_starlette_app):
-    async with app.session_manager.run():
-        yield
+@mcp.tool()
+def get_option_chain(underlying: str, expiry: str) -> str:
+    """
+    Get option chain for an underlying and expiry (YYYY-MM-DD).
+    Returns strikes, LTP, OI, bid/ask to help evaluate premium before entry.
+    """
+    result = kite_helper.get_option_chain(underlying, expiry)
+    return json.dumps(result, default=str)
 
 
-# ============================================================
-# APPLICATION ROUTES
-# ============================================================
+# Mount login routes alongside MCP
+mcp_app = mcp.http_app(path="/mcp")
 
 routes = [
-    Route(
-        "/login",
-        auth.login,
-    ),
-
-    Route(
-        "/callback",
-        auth.callback,
-    ),
-
-    # MCP endpoint:
-    # /mcp
-    Mount(
-        "/mcp",
-        app=mcp_asgi_app,
-    ),
+    Route("/login", auth.login),
+    Route("/callback", auth.callback),
+    Mount("/", app=mcp_app),
 ]
 
-
-# ============================================================
-# MAIN STARLETTE APPLICATION
-# ============================================================
-
-starlette_app = Starlette(
-    routes=routes,
-    lifespan=lifespan,
-)
-
-
-# ============================================================
-# RENDER / UVICORN ENTRY POINT
-# ============================================================
+starlette_app = Starlette(routes=routes, lifespan=mcp_app.router.lifespan_context)
 
 if __name__ == "__main__":
-
     import uvicorn
-
-    port = int(
-        os.environ.get(
-            "PORT",
-            8000,
-        )
-    )
-
-    uvicorn.run(
-        starlette_app,
-        host="0.0.0.0",
-        port=port,
-    )
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(starlette_app, host="0.0.0.0", port=port)
