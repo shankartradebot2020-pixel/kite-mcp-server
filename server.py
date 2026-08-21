@@ -112,7 +112,7 @@ async def call_tool(name: str, arguments: dict):
         return [types.TextContent(type="text", text=json.dumps({"error": str(e)}))]
 
 
-mcp_asgi_app = streamable_http_app(app)
+mcp_asgi_app = app.streamable_http_app()
 
 routes = [
     Route("/login", auth.login),
