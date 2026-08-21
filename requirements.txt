@@ -1,5 +1,5 @@
 kiteconnect==5.0.1
-mcp>=1.10,<2
+fastmcp==2.3.4
 starlette==0.41.3
 uvicorn==0.32.1
 python-dotenv==1.0.1
